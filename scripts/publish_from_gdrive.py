@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import time
+import zipfile
 from zoneinfo import ZoneInfo
 import requests
 
@@ -48,6 +49,11 @@ subprocess.run(
     ],
     check=True,
 )
+
+# Extract any Day_XX.zip archives downloaded from Drive
+for zpath in glob.glob("staging/**/*.zip", recursive=True):
+  with zipfile.ZipFile(zpath, "r") as zf:
+    zf.extractall("staging")
 
 matches = glob.glob("staging/**/manifest*.json", recursive=True)
 if not matches:

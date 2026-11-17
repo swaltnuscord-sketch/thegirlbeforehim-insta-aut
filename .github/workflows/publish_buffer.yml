@@ -5,6 +5,12 @@ on:
     # Off-peak UTC minutes (:07 and :37) = ~23 min before every :30/:00 EST slot,
     # avoiding GitHub Actions :00/:10/:30/:40 cron congestion and catching any missed slot.
     - cron: '7,37 * * * *'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/publish_buffer.yml'
+      - 'scripts/publish_from_gdrive.py'
   workflow_dispatch:
 
 permissions:

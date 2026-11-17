@@ -11,6 +11,7 @@ on:
     paths:
       - '.github/workflows/publish_buffer.yml'
       - 'scripts/publish_from_gdrive.py'
+      - 'trigger_publish.txt'
   workflow_dispatch:
 
 permissions:

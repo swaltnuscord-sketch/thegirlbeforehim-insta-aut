@@ -90,47 +90,9 @@ if not due_posts:
   print("No @thegirlbeforehim posts are due right now. Exiting cleanly.")
   sys.exit(0)
 
-_, target_manifest, manifest = min(due_posts, key=lambda x: x[0])
-post_id = str(manifest.get("post_index") or manifest.get("post_id"))
-day_num = manifest.get("day", "00")
-slot_num = manifest.get("slot", "0")
-fmt = manifest.get("format", "C")
+due_posts.sort(key=lambda x: x[0])
+print(f"Found {len(due_posts)} due post(s) to process.")
 
-print(f"Preparing post {post_id} (Day {day_num}, Slot {slot_num}, Format {fmt})")
-
-staging_dir = os.path.dirname(target_manifest)
-slide_files = manifest.get("slide_filenames") or []
-if not slide_files and manifest.get("image_filename"):
-  slide_files = [manifest["image_filename"]]
-
-if not slide_files:
-  print(f"Error: No slide filenames listed in {target_manifest}.")
-  sys.exit(1)
-
-if len(slide_files) > 10:
-  print(
-      f"Warning: {len(slide_files)} slides found; Meta Content Publishing API"
-      " caps automated carousels at 10 slides. Truncating to first 10."
-  )
-  slide_files = slide_files[:10]
-
-rel_folder = f"day_{int(day_num):02d}_slot_{slot_num}"
-target_dir = os.path.join("docs", "images", rel_folder)
-os.makedirs(target_dir, exist_ok=True)
-
-owner, repo = REPO_NAME.split("/")
-pages_base = f"https://{owner}.github.io/{repo}/images/{rel_folder}"
-
-public_urls = []
-for fname in slide_files:
-  src = os.path.join(staging_dir, fname)
-  if not os.path.exists(src):
-    print(f"Error: Expected slide image {src} not found.")
-    sys.exit(1)
-  shutil.copyfile(src, os.path.join(target_dir, fname))
-  public_urls.append(f"{pages_base}/{fname}")
-
-# Commit & push images to GitHub Pages BEFORE calling Buffer (only if staged diff exists)
 subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
 subprocess.run(
     [
@@ -141,58 +103,59 @@ subprocess.run(
     ],
     check=True,
 )
+
+owner, repo = REPO_NAME.split("/")
+staged_urls_per_post = []
+
+for _, target_manifest, manifest in due_posts:
+  post_id = str(manifest.get("post_index") or manifest.get("post_id"))
+  day_num = manifest.get("day", "00")
+  slot_num = manifest.get("slot", "0")
+  fmt = manifest.get("format", "C")
+  print(f"Staging media for post {post_id} (Day {day_num}, Slot {slot_num}, Format {fmt})")
+
+  staging_dir = os.path.dirname(target_manifest)
+  slide_files = manifest.get("slide_filenames") or []
+  if not slide_files and manifest.get("image_filename"):
+    slide_files = [manifest["image_filename"]]
+
+  if not slide_files:
+    print(f"Error: No slide filenames listed in {target_manifest}.")
+    sys.exit(1)
+
+  if len(slide_files) > 10:
+    print(
+        f"Warning: {len(slide_files)} slides found; Meta Content Publishing API"
+        " caps automated carousels at 10 slides. Truncating to first 10."
+    )
+    slide_files = slide_files[:10]
+
+  rel_folder = f"day_{int(day_num):02d}_slot_{slot_num}"
+  target_dir = os.path.join("docs", "images", rel_folder)
+  os.makedirs(target_dir, exist_ok=True)
+  pages_base = f"https://{owner}.github.io/{repo}/images/{rel_folder}"
+
+  public_urls = []
+  for fname in slide_files:
+    src = os.path.join(staging_dir, fname)
+    if not os.path.exists(src):
+      print(f"Error: Expected slide image {src} not found.")
+      sys.exit(1)
+    shutil.copyfile(src, os.path.join(target_dir, fname))
+    public_urls.append(f"{pages_base}/{fname}")
+
+  staged_urls_per_post.append((post_id, manifest, public_urls))
+
+# Commit & push all due images to GitHub Pages once BEFORE calling Buffer
 subprocess.run(["git", "add", "docs/images/"], check=True)
 diff_check = subprocess.run(["git", "diff", "--cached", "--quiet"])
 if diff_check.returncode != 0:
   subprocess.run(
-      ["git", "commit", "-m", f"Stage GitHub Pages media for post {post_id}"],
+      ["git", "commit", "-m", "Stage GitHub Pages media for due posts"],
       check=True,
   )
   subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=True)
   subprocess.run(["git", "push", "origin", "main"], check=True)
-
-# Wait for GitHub Pages to serve the first image with HTTP 200 (up to 90s)
-print(f"Verifying GitHub Pages availability: {public_urls[0]}")
-for attempt in range(18):
-  try:
-    r = requests.head(public_urls[0], timeout=5, allow_redirects=True)
-    if r.status_code == 200:
-      print("GitHub Pages image is live (HTTP 200).")
-      break
-  except requests.RequestException:
-    pass
-  time.sleep(5)
-else:
-  print("Warning: GitHub Pages did not return HTTP 200 within 90s; proceeding.")
-
-caption = manifest.get("caption", "").strip()
-hashtags = manifest.get("hashtags", "").strip()
-full_text = f"{caption}\n\n{hashtags}".strip()
-
-assets = [{"image": {"url": url}} for url in public_urls]
-# Buffer GraphQL PostType for Instagram feed posts & carousels is always "post"
-ig_type = "post"
-
-slot_str = manifest.get("scheduled_at_est") or manifest.get("scheduled_at_et")
-mode = "shareNow"
-due_at_iso = None
-if slot_str:
-  slot_dt_et = datetime.fromisoformat(slot_str).replace(tzinfo=ET_TZ)
-  slot_dt_utc = slot_dt_et.astimezone(timezone.utc)
-  if slot_dt_utc > datetime.now(timezone.utc):
-    mode = "customScheduled"
-    due_at_iso = slot_dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-post_input = {
-    "channelId": CHANNEL_ID,
-    "text": full_text,
-    "schedulingType": "automatic",
-    "mode": mode,
-    "assets": assets,
-    "metadata": {"instagram": {"type": ig_type, "shouldShareToFeed": True}},
-}
-if due_at_iso:
-  post_input["dueAt"] = due_at_iso
 
 mutation = """
 mutation CreatePost($input: CreatePostInput!) {
@@ -205,28 +168,73 @@ mutation CreatePost($input: CreatePostInput!) {
 }
 """
 
-response = requests.post(
-    BUFFER_API_URL,
-    json={"query": mutation, "variables": {"input": post_input}},
-    headers={
-        "Authorization": f"Bearer {BUFFER_TOKEN}",
-        "Content-Type": "application/json",
-    },
-    timeout=30,
-)
+for idx, (post_id, manifest, public_urls) in enumerate(staged_urls_per_post):
+  # Verify GitHub Pages serves the first image with HTTP 200 (up to 90s)
+  print(f"Verifying GitHub Pages availability for post {post_id}: {public_urls[0]}")
+  for _ in range(18):
+    try:
+      r = requests.head(public_urls[0], timeout=5, allow_redirects=True)
+      if r.status_code == 200:
+        print("GitHub Pages image is live (HTTP 200).")
+        break
+    except requests.RequestException:
+      pass
+    time.sleep(5)
+  else:
+    print("Warning: GitHub Pages did not return HTTP 200 within 90s; proceeding.")
 
-res_json = response.json()
-print("Buffer Response:\n", json.dumps(res_json, indent=2))
+  caption = manifest.get("caption", "").strip()
+  hashtags = manifest.get("hashtags", "").strip()
+  full_text = f"{caption}\n\n{hashtags}".strip()
 
-if "errors" in res_json or "message" in res_json.get("data", {}).get(
-    "createPost", {}
-):
-  print("Buffer failed to create post.")
-  sys.exit(1)
+  assets = [{"image": {"url": url}} for url in public_urls]
+  ig_type = "post"
 
-published_ids.append(post_id)
-with open(PUBLISHED_LEDGER, "w", encoding="utf-8") as f:
-  json.dump(published_ids, f, indent=2)
-  f.write("\n")
+  slot_str = manifest.get("scheduled_at_est") or manifest.get("scheduled_at_et")
+  mode = "shareNow"
+  due_at_iso = None
+  if slot_str:
+    slot_dt_et = datetime.fromisoformat(slot_str).replace(tzinfo=ET_TZ)
+    slot_dt_utc = slot_dt_et.astimezone(timezone.utc)
+    if slot_dt_utc > datetime.now(timezone.utc):
+      mode = "customScheduled"
+      due_at_iso = slot_dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-print(f"Post {post_id} queued in Buffer and recorded in {PUBLISHED_LEDGER}.")
+  post_input = {
+      "channelId": CHANNEL_ID,
+      "text": full_text,
+      "schedulingType": "automatic",
+      "mode": mode,
+      "assets": assets,
+      "metadata": {"instagram": {"type": ig_type, "shouldShareToFeed": True}},
+  }
+  if due_at_iso:
+    post_input["dueAt"] = due_at_iso
+
+  response = requests.post(
+      BUFFER_API_URL,
+      json={"query": mutation, "variables": {"input": post_input}},
+      headers={
+          "Authorization": f"Bearer {BUFFER_TOKEN}",
+          "Content-Type": "application/json",
+      },
+      timeout=30,
+  )
+
+  res_json = response.json()
+  print(f"Buffer Response for post {post_id}:\n", json.dumps(res_json, indent=2))
+
+  if "errors" in res_json or "message" in res_json.get("data", {}).get(
+      "createPost", {}
+  ):
+    print(f"Buffer failed to create post {post_id}.")
+    sys.exit(1)
+
+  published_ids.append(post_id)
+  with open(PUBLISHED_LEDGER, "w", encoding="utf-8") as f:
+    json.dump(published_ids, f, indent=2)
+    f.write("\n")
+
+  print(f"Post {post_id} queued in Buffer and recorded in {PUBLISHED_LEDGER}.")
+  if idx < len(staged_urls_per_post) - 1:
+    time.sleep(10)

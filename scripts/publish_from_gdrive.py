@@ -172,7 +172,8 @@ hashtags = manifest.get("hashtags", "").strip()
 full_text = f"{caption}\n\n{hashtags}".strip()
 
 assets = [{"image": {"url": url}} for url in public_urls]
-ig_type = "carousel" if len(assets) > 1 else "post"
+# Buffer GraphQL PostType for Instagram feed posts & carousels is always "post"
+ig_type = "post"
 
 slot_str = manifest.get("scheduled_at_est") or manifest.get("scheduled_at_et")
 mode = "shareNow"

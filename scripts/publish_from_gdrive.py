@@ -130,7 +130,7 @@ for fname in slide_files:
   shutil.copyfile(src, os.path.join(target_dir, fname))
   public_urls.append(f"{pages_base}/{fname}")
 
-# Commit & push images to GitHub Pages BEFORE calling Buffer
+# Commit & push images to GitHub Pages BEFORE calling Buffer (only if staged diff exists)
 subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
 subprocess.run(
     [
@@ -142,10 +142,8 @@ subprocess.run(
     check=True,
 )
 subprocess.run(["git", "add", "docs/images/"], check=True)
-status_out = subprocess.run(
-    ["git", "status", "--porcelain"], capture_output=True, text=True, check=True
-)
-if status_out.stdout.strip():
+diff_check = subprocess.run(["git", "diff", "--cached", "--quiet"])
+if diff_check.returncode != 0:
   subprocess.run(
       ["git", "commit", "-m", f"Stage GitHub Pages media for post {post_id}"],
       check=True,

@@ -50,8 +50,8 @@ subprocess.run(
     check=True,
 )
 
-# Extract any Day_XX.zip archives downloaded from Drive
-for zpath in glob.glob("staging/**/*.zip", recursive=True):
+# Extract any Day_XX.zip archives downloaded from Drive in sorted order so _v2 overrides
+for zpath in sorted(glob.glob("staging/**/*.zip", recursive=True)):
   with zipfile.ZipFile(zpath, "r") as zf:
     zf.extractall("staging")
 

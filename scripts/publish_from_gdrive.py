@@ -9,6 +9,7 @@ import time
 import zipfile
 from zoneinfo import ZoneInfo
 import requests
+from render_slides import render_slide
 
 GDRIVE_RENDERED_FOLDER_ID = "1ocIfVmkQgdw4txcpMVx_HVjZEB1-4nmQ"
 GDRIVE_FOLDER_URL = (
@@ -50,12 +51,11 @@ subprocess.run(
     check=True,
 )
 
-# Extract any Day_XX.zip archives downloaded from Drive in sorted order so _v2 overrides
 for zpath in sorted(glob.glob("staging/**/*.zip", recursive=True)):
   with zipfile.ZipFile(zpath, "r") as zf:
     zf.extractall("staging")
 
-matches = glob.glob("staging/**/manifest*.json", recursive=True)
+matches = sorted(glob.glob("staging/**/manifest*.json", recursive=True))
 if not matches:
   print("No manifest*.json found in Google Drive 03_Rendered_Posts folder.")
   sys.exit(0)
@@ -63,7 +63,7 @@ if not matches:
 now_et = datetime.now(ET_TZ).replace(tzinfo=None)
 print(f"Current US Eastern Time: {now_et.isoformat()}")
 
-due_posts = []
+due_by_pid = {}
 for path in matches:
   with open(path, "r", encoding="utf-8") as f:
     data = json.load(f)
@@ -79,18 +79,19 @@ for path in matches:
   slot_str = data.get("scheduled_at_est") or data.get("scheduled_at_et")
   if slot_str:
     slot_dt = datetime.fromisoformat(slot_str)
-    # Trigger window: within 25 minutes before scheduled slot or already past
     diff_seconds = (slot_dt - now_et).total_seconds()
     if diff_seconds <= 25 * 60:
-      due_posts.append((slot_dt.isoformat(), path, data))
+      if pid not in due_by_pid or data.get("slides_text"):
+        due_by_pid[pid] = (slot_dt.isoformat(), path, data)
   elif EVENT_NAME == "workflow_dispatch":
-    due_posts.append((data.get("generated_at", ""), path, data))
+    if pid not in due_by_pid or data.get("slides_text"):
+      due_by_pid[pid] = (data.get("generated_at", ""), path, data)
 
+due_posts = sorted(due_by_pid.values(), key=lambda x: x[0])
 if not due_posts:
   print("No @thegirlbeforehim posts are due right now. Exiting cleanly.")
   sys.exit(0)
 
-due_posts.sort(key=lambda x: x[0])
 print(f"Found {len(due_posts)} due post(s) to process.")
 
 subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
@@ -112,12 +113,17 @@ for _, target_manifest, manifest in due_posts:
   day_num = manifest.get("day", "00")
   slot_num = manifest.get("slot", "0")
   fmt = manifest.get("format", "C")
+  bg_hex = manifest.get("bg_hex", "#FBF8F3")
   print(f"Staging media for post {post_id} (Day {day_num}, Slot {slot_num}, Format {fmt})")
 
   staging_dir = os.path.dirname(target_manifest)
   slide_files = manifest.get("slide_filenames") or []
   if not slide_files and manifest.get("image_filename"):
     slide_files = [manifest["image_filename"]]
+
+  slides_text = manifest.get("slides_text") or []
+  if not slide_files and slides_text:
+    slide_files = [f"slide_{i:02d}.png" for i in range(1, len(slides_text) + 1)]
 
   if not slide_files:
     print(f"Error: No slide filenames listed in {target_manifest}.")
@@ -136,17 +142,28 @@ for _, target_manifest, manifest in due_posts:
   pages_base = f"https://{owner}.github.io/{repo}/images/{rel_folder}"
 
   public_urls = []
-  for fname in slide_files:
+  for idx, fname in enumerate(slide_files, 1):
     src = os.path.join(staging_dir, fname)
     if not os.path.exists(src):
-      print(f"Error: Expected slide image {src} not found.")
-      sys.exit(1)
+      if idx - 1 < len(slides_text):
+        print(f"Rendering {fname} in GitHub Actions for post {post_id}...")
+        render_slide(
+            slides_text[idx - 1],
+            bg_hex,
+            src,
+            is_hook=(idx == 1),
+            slide_num=idx,
+            total_slides=len(slide_files),
+            seed=int(post_id) * 100 + idx,
+        )
+      else:
+        print(f"Error: Expected slide image {src} not found.")
+        sys.exit(1)
     shutil.copyfile(src, os.path.join(target_dir, fname))
     public_urls.append(f"{pages_base}/{fname}")
 
   staged_urls_per_post.append((post_id, manifest, public_urls))
 
-# Commit & push all due images to GitHub Pages once BEFORE calling Buffer
 subprocess.run(["git", "add", "docs/images/"], check=True)
 diff_check = subprocess.run(["git", "diff", "--cached", "--quiet"])
 if diff_check.returncode != 0:
@@ -169,7 +186,6 @@ mutation CreatePost($input: CreatePostInput!) {
 """
 
 for idx, (post_id, manifest, public_urls) in enumerate(staged_urls_per_post):
-  # Verify GitHub Pages serves the first image with HTTP 200 (up to 90s)
   print(f"Verifying GitHub Pages availability for post {post_id}: {public_urls[0]}")
   for _ in range(18):
     try:

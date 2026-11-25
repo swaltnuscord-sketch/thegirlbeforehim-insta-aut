@@ -11,6 +11,7 @@ on:
     paths:
       - '.github/workflows/publish_buffer.yml'
       - 'scripts/publish_from_gdrive.py'
+      - 'scripts/render_slides.py'
       - 'trigger_publish.txt'
   workflow_dispatch:
 
@@ -36,7 +37,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Fetch from Google Drive, host on GitHub Pages, and push to Buffer
+      - name: Ensure Playwrite BE VLG font is available
+        run: |
+          mkdir -p fonts
+          curl -sL "https://github.com/google/fonts/raw/main/ofl/playwritebevlg/PlaywriteBEVLG%5Bwght%5D.ttf" -o fonts/PlaywriteBEVLG.ttf
+
+      - name: Fetch from Google Drive, render if needed, host on GitHub Pages, and push to Buffer
         env:
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           BUFFER_INSTAGRAM_CHANNEL_ID: ${{ secrets.BUFFER_INSTAGRAM_CHANNEL_ID }}

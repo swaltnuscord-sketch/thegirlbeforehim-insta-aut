@@ -12,6 +12,7 @@ on:
       - '.github/workflows/publish_buffer.yml'
       - 'scripts/publish_from_gdrive.py'
       - 'scripts/render_slides.py'
+      - 'scripts/render_reel.py'
       - 'trigger_publish.txt'
   workflow_dispatch:
 
@@ -42,7 +43,7 @@ jobs:
           mkdir -p fonts
           curl -sL "https://github.com/google/fonts/raw/main/ofl/playwritebevlg/PlaywriteBEVLG%5Bwght%5D.ttf" -o fonts/PlaywriteBEVLG.ttf
 
-      - name: Fetch from Google Drive, render if needed, host on GitHub Pages, and push to Buffer
+      - name: Fetch from Google Drive, render images or Reels, host on GitHub Pages, and push to Buffer
         env:
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           BUFFER_INSTAGRAM_CHANNEL_ID: ${{ secrets.BUFFER_INSTAGRAM_CHANNEL_ID }}

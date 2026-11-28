@@ -9,6 +9,7 @@ import time
 import zipfile
 from zoneinfo import ZoneInfo
 import requests
+from render_reel import render_reel_mp4
 from render_slides import render_slide
 
 GDRIVE_RENDERED_FOLDER_ID = "1ocIfVmkQgdw4txcpMVx_HVjZEB1-4nmQ"
@@ -106,22 +107,40 @@ subprocess.run(
 )
 
 owner, repo = REPO_NAME.split("/")
-staged_urls_per_post = []
+staged_posts = []
 
 for _, target_manifest, manifest in due_posts:
   post_id = str(manifest.get("post_index") or manifest.get("post_id"))
-  day_num = manifest.get("day", "00")
-  slot_num = manifest.get("slot", "0")
+  day_num = int(manifest.get("day", 0))
+  slot_num = int(manifest.get("slot", 0))
   fmt = manifest.get("format", "C")
   bg_hex = manifest.get("bg_hex", "#FBF8F3")
-  print(f"Staging media for post {post_id} (Day {day_num}, Slot {slot_num}, Format {fmt})")
+  slides_text = manifest.get("slides_text") or []
 
+  is_reel = (
+      fmt == "REEL"
+      or manifest.get("as_reel") is True
+      or (fmt == "A" and slot_num == 5 and day_num % 3 == 0 and manifest.get("as_reel") is not False and len(slides_text) > 0)
+  )
+
+  rel_folder = f"day_{day_num:02d}_slot_{slot_num}"
+
+  if is_reel:
+    print(f"Generating faceless 10s Reel for post {post_id} (Day {day_num}, Slot {slot_num})")
+    video_dir = os.path.join("docs", "videos", rel_folder)
+    os.makedirs(video_dir, exist_ok=True)
+    reel_path = os.path.join(video_dir, "reel.mp4")
+    render_reel_mp4(slides_text, bg_hex, reel_path, post_id=post_id)
+    reel_url = f"https://{owner}.github.io/{repo}/videos/{rel_folder}/reel.mp4"
+    staged_posts.append((post_id, manifest, [reel_url], True))
+    continue
+
+  print(f"Staging image media for post {post_id} (Day {day_num}, Slot {slot_num}, Format {fmt})")
   staging_dir = os.path.dirname(target_manifest)
   slide_files = manifest.get("slide_filenames") or []
   if not slide_files and manifest.get("image_filename"):
     slide_files = [manifest["image_filename"]]
 
-  slides_text = manifest.get("slides_text") or []
   if not slide_files and slides_text:
     slide_files = [f"slide_{i:02d}.png" for i in range(1, len(slides_text) + 1)]
 
@@ -136,7 +155,6 @@ for _, target_manifest, manifest in due_posts:
     )
     slide_files = slide_files[:10]
 
-  rel_folder = f"day_{int(day_num):02d}_slot_{slot_num}"
   target_dir = os.path.join("docs", "images", rel_folder)
   os.makedirs(target_dir, exist_ok=True)
   pages_base = f"https://{owner}.github.io/{repo}/images/{rel_folder}"
@@ -162,9 +180,9 @@ for _, target_manifest, manifest in due_posts:
     shutil.copyfile(src, os.path.join(target_dir, fname))
     public_urls.append(f"{pages_base}/{fname}")
 
-  staged_urls_per_post.append((post_id, manifest, public_urls))
+  staged_posts.append((post_id, manifest, public_urls, False))
 
-subprocess.run(["git", "add", "docs/images/"], check=True)
+subprocess.run(["git", "add", "docs/"], check=True)
 diff_check = subprocess.run(["git", "diff", "--cached", "--quiet"])
 if diff_check.returncode != 0:
   subprocess.run(
@@ -185,13 +203,13 @@ mutation CreatePost($input: CreatePostInput!) {
 }
 """
 
-for idx, (post_id, manifest, public_urls) in enumerate(staged_urls_per_post):
+for idx, (post_id, manifest, public_urls, is_reel) in enumerate(staged_posts):
   print(f"Verifying GitHub Pages availability for post {post_id}: {public_urls[0]}")
   for _ in range(18):
     try:
       r = requests.head(public_urls[0], timeout=5, allow_redirects=True)
       if r.status_code == 200:
-        print("GitHub Pages image is live (HTTP 200).")
+        print("GitHub Pages media is live (HTTP 200).")
         break
     except requests.RequestException:
       pass
@@ -203,8 +221,12 @@ for idx, (post_id, manifest, public_urls) in enumerate(staged_urls_per_post):
   hashtags = manifest.get("hashtags", "").strip()
   full_text = f"{caption}\n\n{hashtags}".strip()
 
-  assets = [{"image": {"url": url}} for url in public_urls]
-  ig_type = "post"
+  if is_reel:
+    assets = [{"video": {"url": public_urls[0], "metadata": {"thumbnailOffset": 1000}}}]
+    ig_type = "reel"
+  else:
+    assets = [{"image": {"url": url}} for url in public_urls]
+    ig_type = "post"
 
   slot_str = manifest.get("scheduled_at_est") or manifest.get("scheduled_at_et")
   mode = "shareNow"
@@ -252,5 +274,5 @@ for idx, (post_id, manifest, public_urls) in enumerate(staged_urls_per_post):
     f.write("\n")
 
   print(f"Post {post_id} queued in Buffer and recorded in {PUBLISHED_LEDGER}.")
-  if idx < len(staged_urls_per_post) - 1:
+  if idx < len(staged_posts) - 1:
     time.sleep(10)
